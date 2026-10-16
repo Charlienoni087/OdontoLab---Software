@@ -1,3 +1,6 @@
+-- =================================================================================
+-- 1. CREACIÓN DE LA BASE DE DATOS
+-- =================================================================================
 IF DB_ID(N'OdontolabDB') IS NULL
     CREATE DATABASE OdontolabDB;
 GO
@@ -5,8 +8,11 @@ GO
 USE OdontolabDB;
 GO
 
---TABLA USUARIOS
+-- =================================================================================
+-- 2. CREACIÓN DE TABLAS
+-- =================================================================================
 
+-- TABLA USUARIOS
 IF OBJECT_ID('dbo.Usuarios', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.Usuarios (
@@ -39,22 +45,19 @@ BEGIN
 END;
 GO
 
---TABLA PACIENTES
+-- TABLA PACIENTES
 IF OBJECT_ID('dbo.Pacientes', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.Pacientes (
         id_paciente INT IDENTITY(1,1) PRIMARY KEY,
         nombre_paciente VARCHAR(100) NOT NULL,
         apellidos VARCHAR(100) NOT NULL,
+        cedula VARCHAR(20) NULL,
         fecha_nacimiento DATE NOT NULL,
-        genero CHAR(1) NOT NULL,
-        correo VARCHAR(150) NULL UNIQUE,
         telefono VARCHAR(20) NOT NULL,
+        correo VARCHAR(150) NULL,
         direccion VARCHAR(200) NULL,
         fecha_registro DATETIME NOT NULL DEFAULT GETDATE(),
-
-        CONSTRAINT CK_Pacientes_Genero
-            CHECK (genero IN ('M', 'F', 'O')),
 
         CONSTRAINT CK_Pacientes_FechaNac
             CHECK (fecha_nacimiento <= CONVERT(DATE, GETDATE())),
@@ -65,11 +68,17 @@ BEGIN
                 OR correo LIKE '%_@__%.__%'
             )
     );
+
+    -- Índices únicos filtrados (permiten múltiples NULL para menores/sin correo, pero evitan duplicados)
+    CREATE UNIQUE NONCLUSTERED INDEX UQ_Pacientes_Cedula 
+        ON dbo.Pacientes(cedula) WHERE cedula IS NOT NULL;
+
+    CREATE UNIQUE NONCLUSTERED INDEX UQ_Pacientes_Correo 
+        ON dbo.Pacientes(correo) WHERE correo IS NOT NULL;
 END;
 GO
 
 -- TABLA EXPEDIENTES
-
 IF OBJECT_ID('dbo.Expedientes', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.Expedientes (
@@ -88,7 +97,6 @@ END;
 GO
 
 -- TABLA PROCEDIMIENTOS CLINICOS
-
 IF OBJECT_ID('dbo.ProcedimientosClinicos', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.ProcedimientosClinicos (
@@ -104,7 +112,6 @@ END;
 GO
 
 -- TABLA CITAS
-
 IF OBJECT_ID('dbo.Citas', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.Citas (
@@ -141,7 +148,6 @@ END;
 GO
 
 -- TABLA DETALLE EXPEDIENTE
-
 IF OBJECT_ID('dbo.DetalleExpediente', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.DetalleExpediente (
@@ -177,7 +183,6 @@ END;
 GO
 
 -- TABLA ODONTOGRAMAS
-
 IF OBJECT_ID('dbo.Odontogramas', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.Odontogramas (
@@ -230,31 +235,184 @@ BEGIN
 END;
 GO
 
+-- TABLA ROLES
+IF OBJECT_ID('dbo.tblRoles', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.tblRoles (
+        idRol INT IDENTITY(1,1) NOT NULL,
+        nombreRol NVARCHAR(50) NOT NULL,
+        activo BIT NOT NULL DEFAULT 1,
+
+        CONSTRAINT PK_tblRoles PRIMARY KEY (idRol),
+        CONSTRAINT CK_tblRoles_nombreRol CHECK(nombreRol IN ('Administrador', 'Recepcionista', 'Asistente', 'Doctor')),
+        CONSTRAINT UQ_tblRoles_nombreRol UNIQUE (nombreRol)
+    );
+END;
+GO
+
+-- TABLA LOG REPORTES
+IF OBJECT_ID('dbo.LogErrores', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.LogErrores (
+        idLog INT IDENTITY(1,1) NOT NULL,
+        mensajeError NVARCHAR(MAX) NOT NULL,
+        numeroError INT NULL,
+        procedimiento NVARCHAR(100) NULL,
+        lineaError INT NULL,
+        usuarioApp NVARCHAR(25) NOT NULL,
+        fechaError DATETIME NOT NULL DEFAULT GETDATE(),
+
+        CONSTRAINT PK_LogErrores PRIMARY KEY (idLog)
+    );
+END;
+GO
+
 PRINT 'OdontoLabDB: tablas creadas o verificadas correctamente.';
 GO
 
---TABLA ROLES
+-- =================================================================================
+-- 3. PROCEDIMIENTOS ALMACENADOS DE PACIENTES
+-- =================================================================================
 
-CREATE TABLE tblRoles (
-	idRol INT IDENTITY(1,1) NOT NULL,
-	nombreRol NVARCHAR(50) NOT NULL,
-	activo BIT NOT NULL DEFAULT 1,
+-- CREAR PACIENTE
+CREATE OR ALTER PROCEDURE dbo.sp_CrearPaciente
+    @nombre_paciente VARCHAR(100),
+    @apellidos VARCHAR(100),
+    @cedula VARCHAR(20) = NULL,
+    @fecha_nacimiento DATE,
+    @telefono VARCHAR(20),
+    @correo VARCHAR(150) = NULL,
+    @direccion VARCHAR(200) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
 
-	CONSTRAINT PK_tblRoles PRIMARY KEY (idRol),
-	CONSTRAINT CK_tblRoles_nombreRol CHECK(nombreRol IN ('Administrador', 'Recepcionista', 'Asistente', 'Doctor')),
-	CONSTRAINT UQ_tblRoles_nombreRol UNIQUE (nombreRol)
-)
+    -- Limpiar espacios o convertir cadena vacía en NULL para no violar los índices únicos
+    SET @cedula = NULLIF(LTRIM(RTRIM(@cedula)), '');
+    SET @correo = NULLIF(LTRIM(RTRIM(@correo)), '');
 
---TABLA LOG REPORTES
-CREATE TABLE LogErrores(
-    idLog INT IDENTITY(1,1) NOT NULL,
-    mensajeError NVARCHAR(MAX) NOT NULL,
-    numeroError INT,
-    procedimiento NVARCHAR(100),
-    lineaError INT,
-    usuarioApp NVARCHAR(25) NOT NULL,
-    fechaError DATETIME DEFAULT GETDATE(),
+    INSERT INTO dbo.Pacientes (
+        nombre_paciente,
+        apellidos,
+        cedula,
+        fecha_nacimiento,
+        telefono,
+        correo,
+        direccion
+    )
+    VALUES (
+        @nombre_paciente,
+        @apellidos,
+        @cedula,
+        @fecha_nacimiento,
+        @telefono,
+        @correo,
+        @direccion
+    );
 
-    CONSTRAINT [PK_tblLogErrores] PRIMARY KEY(idLog)
-);
+    SELECT CAST(SCOPE_IDENTITY() AS INT) AS id_paciente;
+END;
+GO
+
+-- MOSTRAR / BUSCAR PACIENTES
+CREATE OR ALTER PROCEDURE dbo.sp_MostrarPacientes
+    @buscar NVARCHAR(100) = NULL,
+    @pagina INT = 1,
+    @tamPagina INT = 10
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF @pagina < 1 SET @pagina = 1;
+    IF @tamPagina < 1 SET @tamPagina = 10;
+
+    SELECT
+        id_paciente,
+        nombre_paciente,
+        apellidos,
+        cedula,
+        fecha_nacimiento,
+        telefono,
+        correo,
+        direccion,
+        fecha_registro
+    FROM dbo.Pacientes
+    WHERE
+        NULLIF(LTRIM(RTRIM(@buscar)), N'') IS NULL
+        OR nombre_paciente LIKE '%' + @buscar + '%'
+        OR apellidos LIKE '%' + @buscar + '%'
+        OR cedula LIKE '%' + @buscar + '%'
+        OR telefono LIKE '%' + @buscar + '%'
+        OR correo LIKE '%' + @buscar + '%'
+    ORDER BY apellidos, nombre_paciente
+    OFFSET (@pagina - 1) * @tamPagina ROWS
+    FETCH NEXT @tamPagina ROWS ONLY;
+END;
+GO
+
+-- ACTUALIZAR PACIENTE
+CREATE OR ALTER PROCEDURE dbo.sp_ActualizarPaciente
+    @id_paciente INT,
+    @nombre_paciente VARCHAR(100),
+    @apellidos VARCHAR(100),
+    @cedula VARCHAR(20) = NULL,
+    @fecha_nacimiento DATE,
+    @telefono VARCHAR(20),
+    @correo VARCHAR(150) = NULL,
+    @direccion VARCHAR(200) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SET @cedula = NULLIF(LTRIM(RTRIM(@cedula)), '');
+    SET @correo = NULLIF(LTRIM(RTRIM(@correo)), '');
+
+    UPDATE dbo.Pacientes
+    SET
+        nombre_paciente = @nombre_paciente,
+        apellidos = @apellidos,
+        cedula = @cedula,
+        fecha_nacimiento = @fecha_nacimiento,
+        telefono = @telefono,
+        correo = @correo,
+        direccion = @direccion
+    WHERE id_paciente = @id_paciente;
+
+    IF @@ROWCOUNT = 0
+        THROW 50004, 'No existe el paciente indicado.', 1;
+END;
+GO
+
+-- ELIMINAR PACIENTE
+CREATE OR ALTER PROCEDURE dbo.sp_EliminarPaciente
+    @id_paciente INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF EXISTS (
+        SELECT 1
+        FROM dbo.Expedientes
+        WHERE id_paciente = @id_paciente
+    )
+    OR EXISTS (
+        SELECT 1
+        FROM dbo.Citas
+        WHERE id_paciente = @id_paciente
+    )
+    BEGIN
+        THROW 50005,
+            'No se puede eliminar el paciente porque tiene expedientes o citas relacionadas.',
+            1;
+    END;
+
+    DELETE FROM dbo.Pacientes
+    WHERE id_paciente = @id_paciente;
+
+    IF @@ROWCOUNT = 0
+        THROW 50006, 'No existe el paciente indicado.', 1;
+END;
+GO
+
+PRINT 'Procedimientos almacenados de Pacientes creados o actualizados correctamente.';
 GO
